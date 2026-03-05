@@ -9,7 +9,6 @@ import pytz
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="FOOBOT PRO", page_icon="⚽", layout="wide")
 
-# Inicializa contador de uso para evitar banimento (Limite 100/dia)
 if 'api_usage' not in st.session_state:
     st.session_state['api_usage'] = 0
 
@@ -38,7 +37,7 @@ nome_user = st.sidebar.text_input("Digite seu primeiro nome:")
 
 if nome_user:
     permitido, saldo = validar_usuario(nome_user)
-    if não permitido:
+    if not permitido:
         st.sidebar.error("Usuário não encontrado ou sem créditos.")
         st.stop()
     else:
@@ -49,32 +48,29 @@ else:
 
 # --- CONFIGURAÇÕES DAS APIs ---
 API_KEY_SPORTS = [
-    "74d794123dbe38caf1f24a487feccb4b", # Chave do Eliabe
-    "c529d0695b02fa73ccdcc19cb89026d7"  # Sua principal (Reset às 21h)
+    "74d794123dbe38caf1f24a487feccb4b", 
+    "c529d0695b02fa73ccdcc19cb89026d7" 
 ]
-API_TOKEN_FD = "27481152317540abbd381d14669d4a40" # Sua chave Forever do print
+API_TOKEN_FD = "27481152317540abbd381d14669d4a40" 
 
-# --- BLOCO DE DIAGNÓSTICO (O BOTÃO DE TESTE) ---
 st.title("⚽ FOOBOT PRO - Analista de Elite")
 
+# Botão de Diagnóstico para testar a chave Forever
 if st.button("🔌 Testar Conexão Direta (Brasileirão)"):
     url_teste = "https://api.football-data.org/v4/competitions/BSA/matches?status=SCHEDULED"
     headers_fd = {'X-Auth-Token': API_TOKEN_FD}
     try:
         res = requests.get(url_teste, headers=headers_fd).json()
         if 'matches' in res:
-            st.success(f"✅ Conexão OK! Encontrados {len(res['matches'])} jogos agendados.")
-            if res['matches']:
-                st.write("Exemplo de jogo encontrado:", res['matches'][0]['homeTeam']['name'], "x", res['matches'][0]['awayTeam']['name'])
+            st.success(f"✅ Conexão OK! Encontrados {len(res['matches'])} jogos.")
         else:
-            st.error(f"❌ Erro na API: {res}")
+            st.error(f"❌ Resposta da API: {res}")
     except Exception as e:
-        st.error(f"❌ Falha de Conexão: {e}")
+        st.error(f"❌ Falha: {e}")
 
 # --- FUNÇÕES DE DADOS ---
 def fazer_requisicao_sports(url, params=None):
     if st.session_state['api_usage'] >= 95:
-        st.error("⚠️ Limite de segurança (95/100) atingido.")
         return {}
     for key in API_KEY_SPORTS:
         headers = {"x-apisports-key": key}
@@ -87,7 +83,6 @@ def fazer_requisicao_sports(url, params=None):
 
 @st.cache_data(ttl=300)
 def buscar_jogos_unificados(data_str):
-    # Tenta Football-Data primeiro (Ligas Elite)
     try:
         url_fd = f"https://api.football-data.org/v4/matches?dateFrom={data_str}&dateTo={data_str}"
         headers_fd = {'X-Auth-Token': API_TOKEN_FD}
@@ -104,7 +99,6 @@ def buscar_jogos_unificados(data_str):
             return pd.DataFrame(dados)
     except: pass
 
-    # Backup API-Sports (Estaduais)
     res_sp = fazer_requisicao_sports("https://v3.football.api-sports.io/fixtures", {"date": data_str})
     if res_sp.get('response'):
         dados = []
@@ -118,7 +112,7 @@ def buscar_jogos_unificados(data_str):
         return pd.DataFrame(dados)
     return pd.DataFrame()
 
-@st.cache_data(ttl=86400) # Cache de 24h para médias de gols
+@st.cache_data(ttl=86400)
 def calcular_medias(id_time, fonte):
     if fonte == 'API-Sports':
         res = fazer_requisicao_sports("https://v3.football.api-sports.io/fixtures", {"team": id_time, "last": "10", "status": "FT"})
@@ -126,7 +120,7 @@ def calcular_medias(id_time, fonte):
         if not jogos: return 1.2
         gols = [j['goals']['home'] if j['teams']['home']['id'] == id_time else j['goals']['away'] for j in jogos]
         return pd.Series(gols).mean()
-    return 1.4 # Média base para a nova API enquanto não integramos o histórico dela
+    return 1.4
 
 def prob_poisson(media, gols):
     if media <= 0: media = 0.1
@@ -159,4 +153,4 @@ if not df_jogos.empty:
         prob_0x0 = (prob_poisson(m_m, 0) * prob_poisson(m_v, 0)) / 100
         st.success(f"🎯 Probabilidade 0x0: {prob_0x0:.2f}% (Fonte: {j['Fonte']})")
 else:
-    st.warning("Nenhum jogo encontrado para esta data nas APIs ativas.")
+    st.warning("Nenhum jogo encontrado para esta data.")
