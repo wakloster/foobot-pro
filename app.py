@@ -67,7 +67,7 @@ def fazer_requisicao(url, params=None):
 
 
 # --- FUNÇÕES DE DADOS COM CACHE ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=60)
 def buscar_jogos(data_str):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"date": data_str}
@@ -95,7 +95,7 @@ def buscar_jogos(data_str):
             })
     return pd.DataFrame(dados)
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=86400)
 def calcular_medias_ponderadas(id_time, local='home'):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"team": id_time, "last": "10", "status": "FT"} 
@@ -114,7 +114,7 @@ def calcular_medias_ponderadas(id_time, local='home'):
         for _ in range(peso): gols_fator.append(gols)
     return pd.Series(gols_fator).mean()
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def buscar_escalacoes(id_partida):
     url = "https://v3.football.api-sports.io/fixtures/lineups"
     params = {"fixture": id_partida}
