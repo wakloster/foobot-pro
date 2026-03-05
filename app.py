@@ -41,7 +41,7 @@ if nome_user:
         st.sidebar.error("Usuário não encontrado ou sem créditos.")
         st.stop()
 else:
-    st.info("Digite seu nome na lateral para liberar a análise.")
+    st.info("Digite suas informações de login para liberar acesso.")
     st.stop()
 
 # --- CONFIGURAÇÕES DA API ---
@@ -119,23 +119,31 @@ data_escolhida = st.date_input("Data dos jogos:", datetime.date.today(), format=
 df_jogos = buscar_jogos(data_escolhida.strftime('%Y-%m-%d'))
 
 if not df_jogos.empty:
-    def ligas_vip(row):
-        paises_vip = ['Brazil', 'England', 'Spain', 'Germany', 'Italy', 'France']
-        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana']
-        return row['Pais'] in paises_vip or (row['Pais'] == 'World' and row['Liga'] in ligas_mundiais)
+    def ligas_permitidas(row):
+        # Aceita ABSOLUTAMENTE TUDO do Brasil
+        if row['Pais'] == 'Brazil': return True
         
-    df_jogos = df_jogos[df_jogos.apply(ligas_vip, axis=1)]
+        # Filtros específicos da Europa e Mundo
+        if row['Pais'] == 'England' and row['Liga'] == 'Premier League': return True
+        if row['Pais'] == 'Spain' and row['Liga'] == 'La Liga': return True
+        if row['Pais'] == 'Germany' and row['Liga'] == 'Bundesliga': return True
+        if row['Pais'] == 'Italy' and row['Liga'] == 'Serie A': return True
+        if row['Pais'] == 'France' and row['Liga'] == 'Ligue 1': return True
+        
+        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup']
+        return True if row['Pais'] == 'World' and row['Liga'] in ligas_mundiais else False
+        
+    df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
 
     if not df_jogos.empty:
         opcoes = df_jogos.apply(lambda x: f"[{x['Horario']}] {x['Mandante']} x {x['Visitante']} ({x['Liga']})", axis=1)
         jogo_sel = st.selectbox("Selecione a partida:", opcoes.tolist())
         
         if st.button("🔮 Gerar Previsão de Elite"):
-            # DESCONTO DE CRÉDITO AQUI
             novo_saldo = descontar_credito(nome_user, saldo)
             st.session_state['mostrar_resultados'] = True
             st.sidebar.warning(f"Crédito utilizado! Saldo: {novo_saldo}")
-            st.rerun() # Atualiza a tela para mostrar o novo saldo
+            st.rerun()
 
         if st.session_state.get('mostrar_resultados', False):
             with st.spinner('Analisando dados...'):
@@ -163,7 +171,6 @@ if not df_jogos.empty:
                 c1.metric(f"Força Atacante ({jogo_data['Mandante']})", f"{lambda_m:.2f}")
                 c2.metric(f"Fragilidade Defensiva ({jogo_data['Visitante']})", f"{lambda_v:.2f}")
 
-                # Cálculo Poisson
                 p1 = px = p2 = 0
                 resultados = []
                 for i in range(6):
@@ -177,7 +184,6 @@ if not df_jogos.empty:
                 df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
                 st.success(f"🎯 **CRAVADA RECOMENDADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
 
-                # CALCULADORA EV
                 st.markdown("### 💰 Calculadora de Valor (EV)")
                 od1, odx, odv = st.columns(3)
                 in_m = od1.number_input(f"Odd {jogo_data['Mandante']}", 1.0, 20.0, 2.0)
@@ -185,7 +191,7 @@ if not df_jogos.empty:
                 in_v = odv.number_input(f"Odd {jogo_data['Visitante']}", 1.0, 20.0, 3.0)
 
                 r1, rx, rv = st.columns(3)
-                for col, p, odd, label in zip([r1, rx, rv], [p1, px, p2], [in_m, in_x, in_v], ["Mandante", "Empate", "Visitante"]):
+                for col, p, odd in zip([r1, rx, rv], [p1, px, p2], [in_m, in_x, in_v]):
                     ev = ((p/100) * odd) - 1
                     if ev > 0: col.success(f"✅ VALOR: +{ev:.2f}")
                     else: col.error("❌ SEM VALOR")
