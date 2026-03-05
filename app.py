@@ -136,62 +136,78 @@ if not df_jogos.empty:
     df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
 
     if not df_jogos.empty:
-        opcoes = df_jogos.apply(lambda x: f"[{x['Horario']}] {x['Mandante']} x {x['Visitante']} ({x['Liga']})", axis=1)
-        jogo_sel = st.selectbox("Selecione a partida:", opcoes.tolist())
+        # --- FILTRO MULTISELECT REATIVADO ---
+        ligas_disponiveis = sorted(df_jogos['Liga'].unique().tolist())
+        ligas_sel = st.multiselect("📍 Filtrar por Liga (Lista VIP):", options=ligas_disponiveis)
         
-        if st.button("🔮 Gerar Previsão de Elite"):
-            novo_saldo = descontar_credito(nome_user, saldo)
-            st.session_state['mostrar_resultados'] = True
-            st.sidebar.warning(f"Crédito utilizado! Saldo: {novo_saldo}")
-            st.rerun()
+        if ligas_sel:
+            df_jogos = df_jogos[df_jogos['Liga'].isin(ligas_sel)]
+        
+        opcoes = df_jogos.apply(lambda x: f"[{x['Horario']}] {x['Mandante']} x {x['Visitante']} ({x['Liga']})", axis=1)
+        
+        if not opcoes.empty:
+            jogo_sel = st.selectbox("Selecione a partida:", opcoes.tolist())
+            
+            if st.button("🔮 Gerar Previsão de Elite"):
+                # DESCONTO DE CRÉDITO
+                novo_saldo = descontar_credito(nome_user, saldo)
+                st.session_state['mostrar_resultados'] = True
+                st.sidebar.warning(f"Crédito utilizado! Saldo: {novo_saldo}")
+                st.rerun()
 
-        if st.session_state.get('mostrar_resultados', False):
-            with st.spinner('Analisando dados...'):
-                idx = opcoes.tolist().index(jogo_sel)
-                jogo_data = df_jogos.iloc[idx]
-                
-                lambda_m = calcular_medias_ponderadas(jogo_data['ID_Mandante'], 'home')
-                lambda_v = calcular_medias_ponderadas(jogo_data['ID_Visitante'], 'away')
-                
-                st.markdown("---")
-                st.markdown("### 📋 Escalações Oficiais")
-                lineups = buscar_escalacoes(jogo_data['ID_Partida'])
-                if lineups:
-                    c_esc1, c_esc2 = st.columns(2)
-                    for i, time in enumerate(lineups):
-                        col = c_esc1 if i == 0 else c_esc2
-                        with col:
-                            st.subheader(f"{time['team']['name']} ({time['formation']})")
-                            st.caption(f"**Titulares:** {', '.join([p['player']['name'] for p in time['startXI']])}")
-                else:
-                    st.info("🕒 Escalações oficiais 40 min antes do jogo.")
+            if st.session_state.get('mostrar_resultados', False):
+                with st.spinner('Analisando dados...'):
+                    idx = opcoes.tolist().index(jogo_sel)
+                    jogo_data = df_jogos.iloc[idx]
+                    
+                    lambda_m = calcular_medias_ponderadas(jogo_data['ID_Mandante'], 'home')
+                    lambda_v = calcular_medias_ponderadas(jogo_data['ID_Visitante'], 'away')
+                    
+                    st.markdown("---")
+                    st.markdown("### 📋 Escalações Oficiais")
+                    lineups = buscar_escalacoes(jogo_data['ID_Partida'])
+                    if lineups:
+                        c_esc1, c_esc2 = st.columns(2)
+                        for i, time in enumerate(lineups):
+                            col = c_esc1 if i == 0 else c_esc2
+                            with col:
+                                st.subheader(f"{time['team']['name']} ({time['formation']})")
+                                st.caption(f"**Titulares:** {', '.join([p['player']['name'] for p in time['startXI']])}")
+                    else:
+                        st.info("🕒 Escalações oficiais 40 min antes do jogo.")
 
-                st.markdown("---")
-                c1, c2 = st.columns(2)
-                c1.metric(f"Força Atacante ({jogo_data['Mandante']})", f"{lambda_m:.2f}")
-                c2.metric(f"Fragilidade Defensiva ({jogo_data['Visitante']})", f"{lambda_v:.2f}")
+                    st.markdown("---")
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Força Atacante ({jogo_data['Mandante']})", f"{lambda_m:.2f}")
+                    c2.metric(f"Fragilidade Defensiva ({jogo_data['Visitante']})", f"{lambda_v:.2f}")
 
-                p1 = px = p2 = 0
-                resultados = []
-                for i in range(6):
-                    for j in range(6):
-                        prob = (prob_poisson(lambda_m, i) * prob_poisson(lambda_v, j)) / 100
-                        resultados.append({'Placar': f"{i} x {j}", 'Prob': prob})
-                        if i > j: p1 += prob
-                        elif i == j: px += prob
-                        else: p2 += prob
-                
-                df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
-                st.success(f"🎯 **CRAVADA RECOMENDADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
+                    p1 = px = p2 = 0
+                    resultados = []
+                    for i in range(6):
+                        for j in range(6):
+                            prob = (prob_poisson(lambda_m, i) * prob_poisson(lambda_v, j)) / 100
+                            resultados.append({'Placar': f"{i} x {j}", 'Prob': prob})
+                            if i > j: p1 += prob
+                            elif i == j: px += prob
+                            else: p2 += prob
+                    
+                    df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
+                    st.success(f"🎯 **CRAVADA RECOMENDADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
 
-                st.markdown("### 💰 Calculadora de Valor (EV)")
-                od1, odx, odv = st.columns(3)
-                in_m = od1.number_input(f"Odd {jogo_data['Mandante']}", 1.0, 20.0, 2.0)
-                in_x = odx.number_input("Odd Empate", 1.0, 20.0, 3.0)
-                in_v = odv.number_input(f"Odd {jogo_data['Visitante']}", 1.0, 20.0, 3.0)
+                    st.markdown("### 💰 Calculadora de Valor (EV)")
+                    od1, odx, odv = st.columns(3)
+                    in_m = od1.number_input(f"Odd {jogo_data['Mandante']}", 1.0, 20.0, 2.0)
+                    in_x = odx.number_input("Odd Empate", 1.0, 20.0, 3.0)
+                    in_v = odv.number_input(f"Odd {jogo_data['Visitante']}", 1.0, 20.0, 3.0)
 
-                r1, rx, rv = st.columns(3)
-                for col, p, odd in zip([r1, rx, rv], [p1, px, p2], [in_m, in_x, in_v]):
-                    ev = ((p/100) * odd) - 1
-                    if ev > 0: col.success(f"✅ VALOR: +{ev:.2f}")
-                    else: col.error("❌ SEM VALOR")
+                    r1, rx, rv = st.columns(3)
+                    for col, p, odd in zip([r1, rx, rv], [p1, px, p2], [in_m, in_x, in_v]):
+                        ev = ((p/100) * odd) - 1
+                        if ev > 0: col.success(f"✅ VALOR: +{ev:.2f}")
+                        else: col.error("❌ SEM VALOR")
+        else:
+            st.warning("Nenhum jogo encontrado para o filtro selecionado.")
+    else:
+        st.warning("Nenhum jogo das Ligas VIP encontrado para hoje.")
+else:
+    st.info("Aguardando seleção de data...")
