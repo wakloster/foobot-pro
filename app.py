@@ -46,7 +46,8 @@ else:
 # --- CONFIGURAÇÕES DA API (SISTEMA DE FAILOVER) ---
 API_KEYS = [
     "7ae631412b052dece78c1876932d3c92", # CHAVE NOVA (Primária)
-    "c529d0695b02fa73ccdcc19cb89026d7"  # CHAVE ANTIGA (Backup)
+    "c529d0695b02fa73ccdcc19cb89026d7",  # CHAVE ANTIGA (Backup)
+    "66dbfe1207c3fd57847c4ce39ecfcca9"
 ]
 
 def fazer_requisicao(url, params=None):
