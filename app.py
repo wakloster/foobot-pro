@@ -183,6 +183,13 @@ if not df_jogos.empty:
                     else: st.info("🕒 Escalações oficiais disponíveis 40 min antes.")
 
                     st.markdown("---")
+                    # --- VOLTANDO AS MÉTRICAS DE FORÇA ---
+                    c1, c2 = st.columns(2)
+                    c1.metric(f"Força Atacante ({j_d['Mandante']})", f"{l_m:.2f}")
+                    c2.metric(f"Fragilidade Defensiva ({j_d['Visitante']})", f"{l_v:.2f}")
+
+                    p1 = px = p2 = 0
+                    resultados = []
                     p1 = px = p2 = 0
                     resultados = []
                     for i in range(6):
