@@ -133,10 +133,19 @@ df_jogos = buscar_jogos(data_escolhida.strftime('%Y-%m-%d'))
 
 if not df_jogos.empty:
     def ligas_permitidas(row):
+        # Aceita ABSOLUTAMENTE TUDO do Brasil
         if row['Pais'] == 'Brazil': return True
-        paises_vip = ['England', 'Spain', 'Germany', 'Italy', 'France']
+        
+        # Filtros específicos da Europa e Mundo
+        if row['Pais'] == 'England' and row['Liga'] == 'Premier League': return True
+        if row['Pais'] == 'Spain' and row['Liga'] == 'La Liga': return True
+        if row['Pais'] == 'Germany' and row['Liga'] == 'Bundesliga': return True
+        if row['Pais'] == 'Italy' and row['Liga'] == 'Serie A': return True
+        if row['Pais'] == 'France' and row['Liga'] == 'Ligue 1': return True
+        
         ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup']
-        return row['Pais'] in paises_vip or (row['Pais'] == 'World' and row['Liga'] in ligas_mundiais)
+        return True if row['Pais'] == 'World' and row['Liga'] in ligas_mundiais else False
+
         
     df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
 
