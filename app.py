@@ -9,6 +9,10 @@ import pytz
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="FOOBOT PRO", page_icon="⚽", layout="wide")
 
+# Trava de Segurança: Inicializa o contador de uso
+if 'api_usage' not in st.session_state:
+    st.session_state['api_usage'] = 0
+
 # --- CONEXÃO COM GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -43,37 +47,37 @@ else:
     st.info("Digite suas informações de login para liberar acesso.")
     st.stop()
 
-# --- CONFIGURAÇÕES DA API (SISTEMA DE FAILOVER) ---
+# --- CONFIGURAÇÕES DA API (SISTEMA DE FAILOVER EDITADO) ---
 API_KEYS = [
-    "74d794123dbe38caf1f24a487feccb4b", #Chave do Eliabe
-    #"7ae631412b052dece78c1876932d3c92", # CHAVE NOVA (Primária)
-    #"c529d0695b02fa73ccdcc19cb89026d7",  # CHAVE ANTIGA (Backup)
-    # "66dbfe1207c3fd57847c4ce39ecfcca9"
+    "c529d0695b02fa73ccdcc19cb89026d7"  # CHAVE PRINCIPAL REATIVADA
 ]
 
 def fazer_requisicao(url, params=None):
-    """Tenta fazer a requisição iterando pelas chaves da API até conseguir sucesso."""
+    # Trava de Segurança: Não deixa passar de 95 para evitar banimento
+    if st.session_state['api_usage'] >= 95:
+        st.error("⚠️ Limite de segurança atingido (95/100). Aguardando reset das 21h.")
+        return {}
+
     for key in API_KEYS:
         headers = {"x-apisports-key": key}
-        response = requests.get(url, headers=headers, params=params).json()
-        
-        # A API-Sports retorna o campo 'errors' (como dicionário ou lista) quando há falha de token/limite
-        erros = response.get('errors', [])
-        if not erros:
-            return response # Sucesso! Retorna os dados.
+        try:
+            response = requests.get(url, headers=headers, params=params).json()
+            # Incrementa o uso apenas se a resposta for válida
+            st.session_state['api_usage'] += 1
             
-        # Se chegou aqui, a chave atual falhou (passou do limite). Tenta a próxima do loop.
-        
-    # Se esgotar TODAS as chaves, retorna um dicionário vazio
+            erros = response.get('errors', [])
+            if not erros:
+                return response
+        except:
+            continue
     return {}
-
 
 # --- FUNÇÕES DE DADOS COM CACHE ---
 @st.cache_data(ttl=60)
 def buscar_jogos(data_str):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"date": data_str}
-    response = fazer_requisicao(url, params) # Usa o Failover
+    response = fazer_requisicao(url, params)
     
     if not response or 'response' not in response or not response['response']:
         return pd.DataFrame()
@@ -101,7 +105,7 @@ def buscar_jogos(data_str):
 def calcular_medias_ponderadas(id_time, local='home'):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"team": id_time, "last": "10", "status": "FT"} 
-    response = fazer_requisicao(url, params) # Usa o Failover
+    response = fazer_requisicao(url, params)
     
     jogos = response.get('response', [])
     if not jogos: return 0.5 
@@ -120,7 +124,7 @@ def calcular_medias_ponderadas(id_time, local='home'):
 def buscar_escalacoes(id_partida):
     url = "https://v3.football.api-sports.io/fixtures/lineups"
     params = {"fixture": id_partida}
-    response = fazer_requisicao(url, params) # Usa o Failover
+    response = fazer_requisicao(url, params)
     return response.get('response', [])
 
 def prob_poisson(media, gols):
@@ -129,26 +133,22 @@ def prob_poisson(media, gols):
 
 # --- INTERFACE PRINCIPAL ---
 st.title("⚽ FOOBOT PRO - Analista de Elite")
+st.sidebar.write(f"📊 Uso da API: {st.session_state['api_usage']}/100")
 
 data_escolhida = st.date_input("Data dos jogos:", datetime.date.today(), format="DD/MM/YYYY")
 df_jogos = buscar_jogos(data_escolhida.strftime('%Y-%m-%d'))
 
 if not df_jogos.empty:
     def ligas_permitidas(row):
-        # Aceita ABSOLUTAMENTE TUDO do Brasil
         if row['Pais'] == 'Brazil': return True
-        
-        # Filtros específicos da Europa e Mundo
         if row['Pais'] == 'England' and row['Liga'] == 'Premier League': return True
         if row['Pais'] == 'Spain' and row['Liga'] == 'La Liga': return True
         if row['Pais'] == 'Germany' and row['Liga'] == 'Bundesliga': return True
         if row['Pais'] == 'Italy' and row['Liga'] == 'Serie A': return True
         if row['Pais'] == 'France' and row['Liga'] == 'Ligue 1': return True
-        
         ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup']
         return True if row['Pais'] == 'World' and row['Liga'] in ligas_mundiais else False
 
-        
     df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
 
     if not df_jogos.empty:
@@ -166,7 +166,7 @@ if not df_jogos.empty:
                 st.rerun()
 
             if st.session_state.get('mostrar_resultados', False):
-                with st.spinner('Analisando dados (com failover ativado)...'):
+                with st.spinner('Analisando dados...'):
                     idx = opcoes.tolist().index(jogo_sel)
                     j_d = df_jogos.iloc[idx]
                     l_m = calcular_medias_ponderadas(j_d['ID_Mandante'], 'home')
@@ -185,13 +185,10 @@ if not df_jogos.empty:
                     else: st.info("🕒 Escalações oficiais disponíveis 40 min antes.")
 
                     st.markdown("---")
-                    # --- VOLTANDO AS MÉTRICAS DE FORÇA ---
                     c1, c2 = st.columns(2)
                     c1.metric(f"Força Atacante ({j_d['Mandante']})", f"{l_m:.2f}")
                     c2.metric(f"Fragilidade Defensiva ({j_d['Visitante']})", f"{l_v:.2f}")
 
-                    p1 = px = p2 = 0
-                    resultados = []
                     p1 = px = p2 = 0
                     resultados = []
                     for i in range(6):
@@ -205,7 +202,6 @@ if not df_jogos.empty:
                     df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
                     prob_tendencia = max(p1, px, p2)
                     
-                    # --- GRÁFICOS E CONFIANÇA ---
                     st.write("### 🌡️ Nível de Confiança do Modelo")
                     st.progress(min(prob_tendencia * 2 / 100, 1.0))
                     st.write(f"Confiança no cenário mais provável: **{prob_tendencia:.1f}%**")
@@ -224,7 +220,6 @@ if not df_jogos.empty:
                         df_t['Probabilidade (%)'] = df_t['Prob'].apply(lambda x: f"{x:.2f}%")
                         st.dataframe(df_t[['Placar', 'Probabilidade (%)']], hide_index=True, use_container_width=True)
 
-                    # --- CALCULADORA EV ---
                     st.markdown("### 💰 Calculadora de Valor (EV)")
                     od1, odx, odv = st.columns(3)
                     in_m = od1.number_input(f"Odd {j_d['Mandante']}", 1.0, 20.0, 2.0)
