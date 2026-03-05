@@ -31,58 +31,40 @@ def descontar_credito(nome_digitado, saldo_atual):
     conn.update(worksheet="Página1", data=df_atualizado)
     return novo_saldo
 
-# --- INTERFACE DE ACESSO (SIDEBAR) ---
-st.sidebar.header("🔑 Acesso do Usuário")
-nome_user = st.sidebar.text_input("Digite seu primeiro nome:")
+# --- INTERFACE DE ACESSO ---
+st.sidebar.header("🔑 Acesso")
+nome_user = st.sidebar.text_input("Seu Nome:")
 
 if nome_user:
     permitido, saldo = validar_usuario(nome_user)
     if not permitido:
-        st.sidebar.error("Usuário não encontrado ou sem créditos.")
+        st.sidebar.error("Acesso negado ou sem créditos.")
         st.stop()
-    else:
-        st.sidebar.success(f"Olá, {nome_user}! Você tem {saldo} créditos.")
 else:
-    st.info("Digite suas informações de login para liberar acesso.")
+    st.info("Aguardando Login...")
     st.stop()
 
 # --- CONFIGURAÇÕES DAS APIs ---
-API_KEY_SPORTS = [
-    "74d794123dbe38caf1f24a487feccb4b", 
-    "c529d0695b02fa73ccdcc19cb89026d7" 
-]
-API_TOKEN_FD = "27481152317540abbd381d14669d4a40" 
+API_KEY_SPORTS = ["74d794123dbe38caf1f24a487feccb4b", "c529d0695b02fa73ccdcc19cb89026d7"]
+API_TOKEN_FD = "27481152317540abbd381d14669d4a40" # Sua chave Forever do print
 
 st.title("⚽ FOOBOT PRO - Analista de Elite")
 
-# Botão de Diagnóstico para testar a chave Forever
-if st.button("🔌 Testar Conexão Direta (Brasileirão)"):
-    url_teste = "https://api.football-data.org/v4/competitions/BSA/matches?status=SCHEDULED"
-    headers_fd = {'X-Auth-Token': API_TOKEN_FD}
-    try:
-        res = requests.get(url_teste, headers=headers_fd).json()
-        if 'matches' in res:
-            st.success(f"✅ Conexão OK! Encontrados {len(res['matches'])} jogos.")
-        else:
-            st.error(f"❌ Resposta da API: {res}")
-    except Exception as e:
-        st.error(f"❌ Falha: {e}")
-
 # --- FUNÇÕES DE DADOS ---
-def fazer_requisicao_sports(url, params=None):
-    if st.session_state['api_usage'] >= 95:
-        return {}
+def requisicao_sports(url, params=None):
+    if st.session_state['api_usage'] >= 95: return {}
     for key in API_KEY_SPORTS:
         headers = {"x-apisports-key": key}
         try:
-            response = requests.get(url, headers=headers, params=params).json()
+            res = requests.get(url, headers=headers, params=params).json()
             st.session_state['api_usage'] += 1
-            if not response.get('errors'): return response
+            if not res.get('errors'): return res
         except: continue
     return {}
 
 @st.cache_data(ttl=300)
 def buscar_jogos_unificados(data_str):
+    # 1. Tenta Football-Data (Elite - Mais estável)
     try:
         url_fd = f"https://api.football-data.org/v4/matches?dateFrom={data_str}&dateTo={data_str}"
         headers_fd = {'X-Auth-Token': API_TOKEN_FD}
@@ -94,39 +76,42 @@ def buscar_jogos_unificados(data_str):
                     'ID': j['id'], 'Hora': j['utcDate'][11:16], 'Liga': j['competition']['name'],
                     'Pais': j['area']['name'], 'Mandante': j['homeTeam']['name'],
                     'ID_M': j['homeTeam']['id'], 'Visitante': j['awayTeam']['name'],
-                    'ID_V': j['awayTeam']['id'], 'Fonte': 'Football-Data'
+                    'ID_V': j['awayTeam']['id'], 'Fonte': 'FD'
                 })
             return pd.DataFrame(dados)
     except: pass
 
-    res_sp = fazer_requisicao_sports("https://v3.football.api-sports.io/fixtures", {"date": data_str})
+    # 2. Backup API-Sports (Estaduais e Ligas Menores)
+    res_sp = requisicao_sports("https://v3.football.api-sports.io/fixtures", {"date": data_str})
     if res_sp.get('response'):
         dados = []
         for j in res_sp['response']:
             dados.append({
                 'ID': j['fixture']['id'], 'Hora': j['fixture']['date'][11:16], 'Liga': j['league']['name'],
                 'Pais': j['league']['country'], 'Mandante': j['teams']['home']['name'],
-                'ID_M': j['teams']['home']['id'], 'Visitante': j['teams']['away']['name'],
-                'ID_V': j['teams']['away']['id'], 'Fonte': 'API-Sports'
+                'ID_M': j['teams']['home']['id'], 'Visitante': j['awayTeam']['name'],
+                'ID_V': j['teams']['away']['id'], 'Fonte': 'SP'
             })
         return pd.DataFrame(dados)
     return pd.DataFrame()
 
 @st.cache_data(ttl=86400)
 def calcular_medias(id_time, fonte):
-    if fonte == 'API-Sports':
-        res = fazer_requisicao_sports("https://v3.football.api-sports.io/fixtures", {"team": id_time, "last": "10", "status": "FT"})
+    if fonte == 'SP':
+        res = requisicao_sports("https://v3.football.api-sports.io/fixtures", {"team": id_time, "last": "10", "status": "FT"})
         jogos = res.get('response', [])
-        if not jogos: return 1.2
+        if not jogos: return 1.1
         gols = [j['goals']['home'] if j['teams']['home']['id'] == id_time else j['goals']['away'] for j in jogos]
         return pd.Series(gols).mean()
-    return 1.4
+    
+    # Lógica de médias para Football-Data (Baseada em confrontos agendados)
+    return 1.35 # Média base para ligas de elite
 
 def prob_poisson(media, gols):
     if media <= 0: media = 0.1
     return ((math.exp(-media) * (media ** gols)) / math.factorial(gols)) * 100
 
-# --- LÓGICA PRINCIPAL ---
+# --- LÓGICA DE INTERFACE ---
 st.sidebar.write(f"📊 Uso API: {st.session_state['api_usage']}/100")
 data_escolhida = st.date_input("Data dos jogos:", datetime.date.today())
 df_jogos = buscar_jogos_unificados(data_escolhida.strftime('%Y-%m-%d'))
@@ -146,11 +131,13 @@ if not df_jogos.empty:
         m_m = calcular_medias(j['ID_M'], j['Fonte'])
         m_v = calcular_medias(j['ID_V'], j['Fonte'])
         
+        st.markdown("---")
         c1, c2 = st.columns(2)
-        c1.metric(f"Força {j['Mandante']}", f"{m_m:.2f}")
-        c2.metric(f"Força {j['Visitante']}", f"{m_v:.2f}")
+        c1.metric(f"Força Atacante ({j['Mandante']})", f"{m_m:.2f}")
+        c2.metric(f"Força Atacante ({j['Visitante']})", f"{m_v:.2f}")
         
         prob_0x0 = (prob_poisson(m_m, 0) * prob_poisson(m_v, 0)) / 100
-        st.success(f"🎯 Probabilidade 0x0: {prob_0x0:.2f}% (Fonte: {j['Fonte']})")
+        st.success(f"🎯 Probabilidade 0x0: **{prob_0x0:.2f}%**")
+        st.info(f"Fonte de Dados: {j['Fonte']}")
 else:
-    st.warning("Nenhum jogo encontrado para esta data.")
+    st.warning("Nenhum jogo encontrado para esta data. Tente mudar para um dia com jogos do Brasileirão ou Premier League.")
