@@ -74,34 +74,55 @@ def fazer_requisicao(url, params=None):
             continue
     return {}
 
-# --- FUNÇÕES DE DADOS COM CACHE ---
+# --- NOVA FUNÇÃO DE BUSCA HÍBRIDA ---
 @st.cache_data(ttl=300)
 def buscar_jogos(data_str):
-    url = "https://v3.football.api-sports.io/fixtures"
-    params = {"date": data_str}
-    response = fazer_requisicao(url, params)
+    # Tenta primeiro a Football-Data (Ligas de Elite)
+    headers_fd = {'X-Auth-Token': API_TOKEN_FD}
+    url_fd = f"https://api.football-data.org/v4/matches?dateFrom={data_str}&dateTo={data_str}"
     
-    if not response or 'response' not in response:
-        return pd.DataFrame()
+    try:
+        res_fd = requests.get(url_fd, headers=headers_fd).json()
+        if 'matches' in res_fd and res_fd['matches']:
+            dados = []
+            for jogo in res_fd['matches']:
+                dados.append({
+                    'ID_Partida': jogo['id'],
+                    'Horario': jogo['utcDate'][11:16],
+                    'Liga': jogo['competition']['name'],
+                    'Pais': jogo['area']['name'],
+                    'Mandante': jogo['homeTeam']['name'],
+                    'ID_Mandante': jogo['homeTeam']['id'],
+                    'Visitante': jogo['awayTeam']['name'],
+                    'ID_Visitante': jogo['awayTeam']['id'],
+                    'Fonte': 'Football-Data' # Para sabermos de onde veio
+                })
+            return pd.DataFrame(dados)
+    except:
+        pass
 
-    dados = []
-    fuso_br = pytz.timezone('America/Sao_Paulo')
-    for jogo in response['response']:
-        status = jogo['fixture']['status']['short']
-        if status in ['NS', '1H', 'HT', '2H', 'LIVE']:
-            data_utc = datetime.datetime.fromisoformat(jogo['fixture']['date'].replace('Z', '+00:00'))
-            data_br = data_utc.astimezone(fuso_br)
+    # Se falhar ou não tiver jogos na elite, tenta a API-Sports (Backup/Estaduais)
+    url_sp = "https://v3.football.api-sports.io/fixtures"
+    params_sp = {"date": data_str}
+    response_sp = fazer_requisicao(url_sp, params_sp)
+    
+    if response_sp and 'response' in response_sp:
+        dados = []
+        for jogo in response_sp['response']:
             dados.append({
                 'ID_Partida': jogo['fixture']['id'],
-                'Horario': data_br.strftime('%H:%M'),
+                'Horario': jogo['fixture']['date'][11:16],
                 'Liga': jogo['league']['name'],
                 'Pais': jogo['league']['country'], 
                 'Mandante': jogo['teams']['home']['name'],
                 'ID_Mandante': jogo['teams']['home']['id'],
                 'Visitante': jogo['teams']['away']['name'],
-                'ID_Visitante': jogo['teams']['away']['id']
+                'ID_Visitante': jogo['teams']['away']['id'],
+                'Fonte': 'API-Sports'
             })
-    return pd.DataFrame(dados)
+        return pd.DataFrame(dados)
+    
+    return pd.DataFrame()
 
 @st.cache_data(ttl=86400) # Cache de 24h para médias de gols
 def calcular_medias_ponderadas(id_time, local='home'):
