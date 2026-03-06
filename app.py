@@ -1,14 +1,20 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+import google.generativeai as genai  # <--- NOVA BIBLIOTECA DA IA
 import requests
 import pandas as pd
 import math
 import datetime
 import pytz
-import time # <--- IMPORT VITAL ADICIONADO AQUI
+import time
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="FOOBOT PRO", page_icon="⚽", layout="wide")
+
+# --- CONFIGURAÇÃO DA IA (GEMINI) ---
+# Substitua pela sua chave real gerada no Google AI Studio
+genai.configure(api_key="AIzaSyACkhYDdDbI_ZjifF5rRxEbmZ0jJ12WGw8") 
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Trava de Segurança: Inicializa o contador de uso
 if 'api_usage' not in st.session_state:
@@ -54,40 +60,31 @@ API_KEYS = [
 ]
 
 def fazer_requisicao(url, params=None):
-    """Tenta fazer a requisição iterando pelas chaves da API até conseguir sucesso."""
-    # Trava de Segurança
     if st.session_state['api_usage'] >= 95:
         st.error("⚠️ Limite de segurança atingido (95/100). Aguardando reset das 21h.")
         return {}
 
-    # PAUSA OBRIGATÓRIA PARA A API NÃO BLOQUEAR POR VELOCIDADE (Rate Limit)
     time.sleep(1.2) 
 
     for key in API_KEYS:
         headers = {"x-apisports-key": key}
         try:
             response = requests.get(url, headers=headers, params=params).json()
-            
-            # Incrementa o uso seguro
             st.session_state['api_usage'] += 1
-            
-            # A API-Sports retorna o campo 'errors' quando há falha de token/limite
             erros = response.get('errors', [])
             if not erros:
-                return response # Sucesso! Retorna os dados.
+                return response 
         except:
             continue
             
-    # Se esgotar TODAS as chaves, retorna um dicionário vazio
     return {}
-
 
 # --- FUNÇÕES DE DADOS COM CACHE ---
 @st.cache_data(ttl=3600)
 def buscar_jogos(data_str):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"date": data_str}
-    response = fazer_requisicao(url, params) # Usa o Failover
+    response = fazer_requisicao(url, params) 
     
     if not response or 'response' not in response or not response['response']:
         return pd.DataFrame()
@@ -114,18 +111,17 @@ def buscar_jogos(data_str):
 @st.cache_data(ttl=3600)
 def calcular_medias_ponderadas(id_time, local='home'):
     url = "https://v3.football.api-sports.io/fixtures"
-    params = {"team": id_time, "last": "10"} # Removido o status="FT" para não quebrar a busca
-    response = fazer_requisicao(url, params) # Usa o Failover
+    params = {"team": id_time, "last": "10"} 
+    response = fazer_requisicao(url, params) 
     
     jogos = response.get('response', [])
-    if not jogos: return 1.35 # Fallback ajustado para evitar cravadas de 0x0
+    if not jogos: return 1.35 
     
     gols_fator = [] 
     jogos_ordenados = list(reversed(jogos)) 
     for i, j in enumerate(jogos_ordenados):
         peso = 1 if i < 4 else (2 if i < 8 else 4)
         
-        # Pega o histórico independente se jogou em casa ou fora
         if j['teams']['home']['id'] == id_time:
             gols = j['goals']['home']
         else:
@@ -143,15 +139,37 @@ def calcular_medias_ponderadas(id_time, local='home'):
 def buscar_escalacoes(id_partida):
     url = "https://v3.football.api-sports.io/fixtures/lineups"
     params = {"fixture": id_partida}
-    response = fazer_requisicao(url, params) # Usa o Failover
+    response = fazer_requisicao(url, params) 
     return response.get('response', [])
 
 def prob_poisson(media, gols):
     if media <= 0: media = 0.1
     return ((math.exp(-media) * (media ** gols)) / math.factorial(gols)) * 100
 
+# --- NOVA FUNÇÃO: ANÁLISE DO GEMINI ---
+def gerar_analise_gemini(mandante, visitante, forca_m, forca_v, prob_tendencia, placar_cravada):
+    prompt = f"""
+    Você é um analista de dados esportivos focado em apostas de valor.
+    Estou analisando o jogo: {mandante} (Casa) x {visitante} (Fora).
+    
+    Os dados do meu modelo de Poisson são:
+    - Força de Ataque do Mandante: {forca_m:.2f}
+    - Fragilidade Defensiva do Visitante: {forca_v:.2f}
+    - Placar mais provável (cravada): {placar_cravada}
+    - Confiança do modelo: {prob_tendencia:.1f}%
+    
+    Escreva um breve parágrafo (máximo 4 linhas) direcionado ao apostador. 
+    Se a Força de Ataque for igual a 1.35 para ambos, avise educadamente que os dados históricos da API estavam escassos para este jogo, mas faça uma análise rápida com base na relevância dos times no cenário atual do futebol. 
+    Seja direto e use tom profissional.
+    """
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"A Inteligência Artificial está indisponível no momento. Fique com a análise matemática acima."
+
 # --- INTERFACE PRINCIPAL ---
-st.title("⚽ FOOBOT PRO - Analista de Elite")
+st.title("⚽ FOOBOT PRO AI - Analista de Elite")
 st.sidebar.write(f"📊 Uso da API: {st.session_state.get('api_usage', 0)}/100")
 
 data_escolhida = st.date_input("Data dos jogos:", datetime.date.today(), format="DD/MM/YYYY")
@@ -159,19 +177,14 @@ df_jogos = buscar_jogos(data_escolhida.strftime('%Y-%m-%d'))
 
 if not df_jogos.empty:
     def ligas_permitidas(row):
-        # Aceita ABSOLUTAMENTE TUDO do Brasil
         if row['Pais'] == 'Brazil': return True
-        
-        # Filtros específicos da Europa e Mundo
         if row['Pais'] == 'England' and row['Liga'] == 'Premier League': return True
         if row['Pais'] == 'Spain' and row['Liga'] == 'La Liga': return True
         if row['Pais'] == 'Germany' and row['Liga'] == 'Bundesliga': return True
         if row['Pais'] == 'Italy' and row['Liga'] == 'Serie A': return True
         if row['Pais'] == 'France' and row['Liga'] == 'Ligue 1': return True
-        
-        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup']
+        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup', 'Copa do Brasil']
         return True if row['Pais'] == 'World' and row['Liga'] in ligas_mundiais else False
-
         
     df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
 
@@ -183,14 +196,14 @@ if not df_jogos.empty:
         opcoes = df_jogos.apply(lambda x: f"[{x['Horario']}] {x['Mandante']} x {x['Visitante']} ({x['Liga']})", axis=1)
         if not opcoes.empty:
             jogo_sel = st.selectbox("Selecione a partida:", opcoes.tolist())
-            if st.button("🔮 Gerar Previsão de Elite"):
+            if st.button("🔮 Gerar Previsão com IA"):
                 novo_saldo = descontar_credito(nome_user, saldo)
                 st.session_state['mostrar_resultados'] = True
                 st.sidebar.warning(f"Crédito utilizado! Saldo: {novo_saldo}")
                 st.rerun()
 
             if st.session_state.get('mostrar_resultados', False):
-                with st.spinner('Analisando dados (com failover ativado)...'):
+                with st.spinner('O Modelo Matemático e a IA estão analisando os dados...'):
                     idx = opcoes.tolist().index(jogo_sel)
                     j_d = df_jogos.iloc[idx]
                     l_m = calcular_medias_ponderadas(j_d['ID_Mandante'], 'home')
@@ -209,7 +222,6 @@ if not df_jogos.empty:
                     else: st.info("🕒 Escalações oficiais disponíveis 40 min antes.")
 
                     st.markdown("---")
-                    # --- VOLTANDO AS MÉTRICAS DE FORÇA ---
                     c1, c2 = st.columns(2)
                     c1.metric(f"Força Atacante ({j_d['Mandante']})", f"{l_m:.2f}")
                     c2.metric(f"Fragilidade Defensiva ({j_d['Visitante']})", f"{l_v:.2f}")
@@ -226,12 +238,19 @@ if not df_jogos.empty:
                     
                     df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
                     prob_tendencia = max(p1, px, p2)
+                    placar_cravada = df_res.iloc[0]['Placar']
                     
-                    # --- GRÁFICOS E CONFIANÇA ---
                     st.write("### 🌡️ Nível de Confiança do Modelo")
                     st.progress(min(prob_tendencia * 2 / 100, 1.0))
                     st.write(f"Confiança no cenário mais provável: **{prob_tendencia:.1f}%**")
-                    st.success(f"🎯 **CRAVADA RECOMENDADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
+                    st.success(f"🎯 **CRAVADA RECOMENDADA:** {placar_cravada} ({df_res.iloc[0]['Prob']:.2f}%)")
+
+                    # --- EXIBIÇÃO DA ANÁLISE DA IA ---
+                    st.markdown("---")
+                    st.markdown("### 🤖 Veredito da Inteligência Artificial (Gemini)")
+                    with st.spinner("Gemini escrevendo análise..."):
+                        analise_texto = gerar_analise_gemini(j_d['Mandante'], j_d['Visitante'], l_m, l_v, prob_tendencia, placar_cravada)
+                        st.info(analise_texto)
 
                     st.markdown("---")
                     col_g, col_t = st.columns([1.2, 1])
@@ -246,7 +265,6 @@ if not df_jogos.empty:
                         df_t['Probabilidade (%)'] = df_t['Prob'].apply(lambda x: f"{x:.2f}%")
                         st.dataframe(df_t[['Placar', 'Probabilidade (%)']], hide_index=True, use_container_width=True)
 
-                    # --- CALCULADORA EV ---
                     st.markdown("### 💰 Calculadora de Valor (EV)")
                     od1, odx, odv = st.columns(3)
                     in_m = od1.number_input(f"Odd {j_d['Mandante']}", 1.0, 20.0, 2.0)
