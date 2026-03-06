@@ -3,3 +3,4 @@ requests
 pandas
 pytz
 st-gsheets-connection
+google-generativeai
