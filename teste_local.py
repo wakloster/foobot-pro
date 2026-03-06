@@ -1,30 +1,61 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
-import requests
+import google.generativeai as genai
 import pandas as pd
 import math
 import datetime
 import pytz
-import time # <--- IMPORT VITAL ADICIONADO AQUI
+import time
+import random
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="FOOBOT PRO", page_icon="⚽", layout="wide")
 
-# Trava de Segurança: Inicializa o contador de uso
-if 'api_usage' not in st.session_state:
-    st.session_state['api_usage'] = 0
+# # --- MOTOR DE IA (SINGLETON) ---
+# --- CONFIGURAÇÃO DA IA (GEMINI 2.5) ---
+@st.cache_resource
+def configurar_ia():
+    if "GEMINI_API_KEY" in st.secrets:
+        try:
+            chave = st.secrets["GEMINI_API_KEY"]
+            genai.configure(api_key=chave, transport='rest')
+            # Forçamos a 2.5 que é a que funcionou no seu PC
+            return genai.GenerativeModel(model_name='gemini-2.5-flash')
+        except Exception as e:
+            st.error(f"Erro na configuração: {e}")
+    return None
+
+model = configurar_ia()
+
+# --- FUNÇÃO DE ANÁLISE COM TRATAMENTO DE COTA ---
+def gerar_analise_gemini(mandante, visitante, l_m, l_v, prob, cravada):
+    if model is None: return "IA não configurada."
+    
+    prompt = f"Analise: {mandante} x {visitante}. Poisson: {cravada} ({prob:.1f}%). Dê um veredito curto."
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        # Se estourar a cota de 5 req/min do Gemini 2.5
+        if "429" in str(e):
+            return "⏳ Limite de velocidade atingido. Aguarde 30 segundos e tente novamente."
+        return f"Erro na análise da IA: {e}"
 
 # --- CONEXÃO COM GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def validar_usuario(nome_digitado):
-    df = conn.read(worksheet="Página1", ttl=0)
-    user_row = df[df['nome'].str.lower() == nome_digitado.lower()]
-    if not user_row.empty:
-        creditos_atuais = user_row.iloc[0]['creditos']
-        if creditos_atuais > 0:
-            return True, int(creditos_atuais)
-    return False, 0
+    try:
+        df = conn.read(worksheet="Página1", ttl=0)
+        user_row = df[df['nome'].str.lower() == nome_digitado.lower()]
+        if not user_row.empty:
+            creditos_atuais = user_row.iloc[0]['creditos']
+            if creditos_atuais > 0:
+                return True, int(creditos_atuais)
+        return False, 0
+    except:
+        return False, 0
 
 def descontar_credito(nome_digitado, saldo_atual):
     novo_saldo = saldo_atual - 1
@@ -33,9 +64,9 @@ def descontar_credito(nome_digitado, saldo_atual):
     conn.update(worksheet="Página1", data=df_atualizado)
     return novo_saldo
 
-# --- INTERFACE DE ACESSO (SIDEBAR) ---
+# --- INTERFACE DE ACESSO ---
 st.sidebar.header("🔑 Acesso do Usuário")
-nome_user = st.sidebar.text_input("Digite seu primeiro nome:")
+nome_user = st.sidebar.text_input("Digite suas informações de login:")
 
 if nome_user:
     permitido, saldo = validar_usuario(nome_user)
@@ -48,50 +79,46 @@ else:
     st.info("Digite suas informações de login para liberar acesso.")
     st.stop()
 
-# --- CONFIGURAÇÕES DA API (SISTEMA DE FAILOVER) ---
-API_KEYS = [
-    "b6fad616c22249eb28bba395de1b20fc",
-]
-
+# ==========================================
+# 🛠️ MOCK DA API (AMBIENTE DE HOMOLOGAÇÃO)
+# ==========================================
 def fazer_requisicao(url, params=None):
-    """Tenta fazer a requisição iterando pelas chaves da API até conseguir sucesso."""
-    # Trava de Segurança
-    if st.session_state['api_usage'] >= 95:
-        st.error("⚠️ Limite de segurança atingido (95/100). Aguardando reset das 21h.")
-        return {}
+    """Simula as respostas da API-Sports para testes."""
+    time.sleep(0.3) 
+    if params and "date" in params:
+        return {
+            "response": [
+                {"fixture": {"id": 1001, "date": "2026-03-06T15:30:00+00:00", "status": {"short": "NS"}}, "league": {"name": "Bundesliga", "country": "Germany"}, "teams": {"home": {"id": 157, "name": "Bayern München"}, "away": {"id": 163, "name": "Borussia M'gladbach"}}},
+                {"fixture": {"id": 1002, "date": "2026-03-08T16:00:00+00:00", "status": {"short": "NS"}}, "league": {"name": "Copa do Brasil", "country": "World"}, "teams": {"home": {"id": 120, "name": "Flamengo"}, "away": {"id": 121, "name": "Palmeiras"}}}
+            ]
+        }
+    elif params and "last" in params:
+        id_buscado = params["team"]
+        return {"response": [{"teams": {"home": {"id": id_buscado}, "away": {"id": 999}}, "goals": {"home": random.randint(0,3), "away": random.randint(0,2)}} for _ in range(10)]}
+    return {"response": []}
 
-    # PAUSA OBRIGATÓRIA PARA A API NÃO BLOQUEAR POR VELOCIDADE (Rate Limit)
-    time.sleep(1.2) 
-
-    for key in API_KEYS:
-        headers = {"x-apisports-key": key}
-        try:
-            response = requests.get(url, headers=headers, params=params).json()
-            
-            # Incrementa o uso seguro
-            st.session_state['api_usage'] += 1
-            
-            # A API-Sports retorna o campo 'errors' quando há falha de token/limite
-            erros = response.get('errors', [])
-            if not erros:
-                return response # Sucesso! Retorna os dados.
-        except:
-            continue
-            
-    # Se esgotar TODAS as chaves, retorna um dicionário vazio
-    return {}
-
+# --- FUNÇÃO DE IA ÚNICA E CORRIGIDA ---
+def gerar_analise_gemini(mandante, visitante, l_m, l_v, prob, cravada):
+    if model is None:
+        return "IA não configurada corretamente."
+    
+    prompt = f"Analise o jogo {mandante} x {visitante}. Médias de gols: Mandante {l_m:.2f}, Visitante {l_v:.2f}. Placar provável: {cravada}. Confiança: {prob:.1f}%. Dê um veredito de aposta curto."
+    
+    try:
+        # Usa o objeto model global que já foi validado
+        response = model.generate_content(prompt)
+        return response.text if response else "Sem resposta da IA"
+    except Exception as e:
+        return f"Erro na análise da IA: {e}"
 
 # --- FUNÇÕES DE DADOS COM CACHE ---
 @st.cache_data(ttl=3600)
 def buscar_jogos(data_str):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"date": data_str}
-    response = fazer_requisicao(url, params) # Usa o Failover
-    
+    response = fazer_requisicao(url, params) 
     if not response or 'response' not in response or not response['response']:
         return pd.DataFrame()
-
     dados = []
     fuso_br = pytz.timezone('America/Sao_Paulo')
     for jogo in response['response']:
@@ -114,102 +141,65 @@ def buscar_jogos(data_str):
 @st.cache_data(ttl=3600)
 def calcular_medias_ponderadas(id_time, local='home'):
     url = "https://v3.football.api-sports.io/fixtures"
-    params = {"team": id_time, "last": "10"} # Removido o status="FT" para não quebrar a busca
-    response = fazer_requisicao(url, params) # Usa o Failover
-    
+    params = {"team": id_time, "last": "10"} 
+    response = fazer_requisicao(url, params) 
     jogos = response.get('response', [])
-    if not jogos: return 1.35 # Fallback ajustado para evitar cravadas de 0x0
-    
+    if not jogos: return 1.35 
     gols_fator = [] 
     jogos_ordenados = list(reversed(jogos)) 
     for i, j in enumerate(jogos_ordenados):
         peso = 1 if i < 4 else (2 if i < 8 else 4)
-        
-        # Pega o histórico independente se jogou em casa ou fora
-        if j['teams']['home']['id'] == id_time:
-            gols = j['goals']['home']
-        else:
-            gols = j['goals']['away']
-            
+        gols = j['goals']['home'] if j['teams']['home']['id'] == id_time else j['goals']['away']
         if (local == 'home' and j['teams']['home']['id'] == id_time) or (local == 'away' and j['teams']['away']['id'] == id_time):
             peso += 1
-            
         if gols is not None:
             for _ in range(peso): gols_fator.append(gols)
-            
     return pd.Series(gols_fator).mean() if gols_fator else 1.35
 
 @st.cache_data(ttl=600)
 def buscar_escalacoes(id_partida):
-    url = "https://v3.football.api-sports.io/fixtures/lineups"
-    params = {"fixture": id_partida}
-    response = fazer_requisicao(url, params) # Usa o Failover
-    return response.get('response', [])
+    return fazer_requisicao("url", params={"fixture": id_partida}).get('response', [])
 
 def prob_poisson(media, gols):
     if media <= 0: media = 0.1
     return ((math.exp(-media) * (media ** gols)) / math.factorial(gols)) * 100
 
 # --- INTERFACE PRINCIPAL ---
-st.title("⚽ FOOBOT PRO - Analista de Elite")
-st.sidebar.write(f"📊 Uso da API: {st.session_state.get('api_usage', 0)}/100")
+st.title("⚽ FOOBOT PRO AI - Homologação")
 
-data_escolhida = st.date_input("Data dos jogos:", datetime.date.today(), format="DD/MM/YYYY")
+data_escolhida = st.date_input("Data dos jogos:", datetime.date.today())
 df_jogos = buscar_jogos(data_escolhida.strftime('%Y-%m-%d'))
 
 if not df_jogos.empty:
     def ligas_permitidas(row):
-        # Aceita ABSOLUTAMENTE TUDO do Brasil
         if row['Pais'] == 'Brazil': return True
-        
-        # Filtros específicos da Europa e Mundo
-        if row['Pais'] == 'England' and row['Liga'] == 'Premier League': return True
-        if row['Pais'] == 'Spain' and row['Liga'] == 'La Liga': return True
         if row['Pais'] == 'Germany' and row['Liga'] == 'Bundesliga': return True
-        if row['Pais'] == 'Italy' and row['Liga'] == 'Serie A': return True
-        if row['Pais'] == 'France' and row['Liga'] == 'Ligue 1': return True
-        
-        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup']
-        return True if row['Pais'] == 'World' and row['Liga'] in ligas_mundiais else False
-
+        return True if row['Pais'] == 'World' and row['Liga'] == 'Copa do Brasil' else False
         
     df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
 
     if not df_jogos.empty:
         ligas_disponiveis = sorted(df_jogos['Liga'].unique().tolist())
-        ligas_sel = st.multiselect("📍 Filtrar por Liga (Lista VIP):", options=ligas_disponiveis)
+        ligas_sel = st.multiselect("📍 Filtrar por Liga:", options=ligas_disponiveis)
         if ligas_sel: df_jogos = df_jogos[df_jogos['Liga'].isin(ligas_sel)]
         
         opcoes = df_jogos.apply(lambda x: f"[{x['Horario']}] {x['Mandante']} x {x['Visitante']} ({x['Liga']})", axis=1)
         if not opcoes.empty:
-            jogo_sel = st.selectbox("Selecione a partida:", opcoes.tolist())
-            if st.button("🔮 Gerar Previsão de Elite"):
+            jogo_sel = st.selectbox("Selecione a partida simulada:", opcoes.tolist())
+            if st.button("🔮 Gerar Previsão com IA"):
                 novo_saldo = descontar_credito(nome_user, saldo)
                 st.session_state['mostrar_resultados'] = True
                 st.sidebar.warning(f"Crédito utilizado! Saldo: {novo_saldo}")
                 st.rerun()
 
             if st.session_state.get('mostrar_resultados', False):
-                with st.spinner('Analisando dados (com failover ativado)...'):
+                with st.spinner('O Modelo Matemático e a IA estão analisando os dados...'):
                     idx = opcoes.tolist().index(jogo_sel)
                     j_d = df_jogos.iloc[idx]
                     l_m = calcular_medias_ponderadas(j_d['ID_Mandante'], 'home')
                     l_v = calcular_medias_ponderadas(j_d['ID_Visitante'], 'away')
                     
                     st.markdown("---")
-                    st.markdown("### 📋 Escalações Oficiais")
-                    lineups = buscar_escalacoes(j_d['ID_Partida'])
-                    if lineups:
-                        c_esc1, c_esc2 = st.columns(2)
-                        for i, t in enumerate(lineups):
-                            col = c_esc1 if i == 0 else c_esc2
-                            with col:
-                                st.subheader(f"{t['team']['name']} ({t['formation']})")
-                                st.caption(f"**Titulares:** {', '.join([p['player']['name'] for p in t['startXI']])}")
-                    else: st.info("🕒 Escalações oficiais disponíveis 40 min antes.")
-
-                    st.markdown("---")
-                    # --- VOLTANDO AS MÉTRICAS DE FORÇA ---
                     c1, c2 = st.columns(2)
                     c1.metric(f"Força Atacante ({j_d['Mandante']})", f"{l_m:.2f}")
                     c2.metric(f"Fragilidade Defensiva ({j_d['Visitante']})", f"{l_v:.2f}")
@@ -226,12 +216,15 @@ if not df_jogos.empty:
                     
                     df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
                     prob_tendencia = max(p1, px, p2)
+                    placar_cravada = df_res.iloc[0]['Placar']
                     
-                    # --- GRÁFICOS E CONFIANÇA ---
-                    st.write("### 🌡️ Nível de Confiança do Modelo")
-                    st.progress(min(prob_tendencia * 2 / 100, 1.0))
-                    st.write(f"Confiança no cenário mais provável: **{prob_tendencia:.1f}%**")
-                    st.success(f"🎯 **CRAVADA RECOMENDADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
+                    st.success(f"🎯 **CRAVADA RECOMENDADA:** {placar_cravada} ({df_res.iloc[0]['Prob']:.2f}%)")
+
+                    st.markdown("---")
+                    st.markdown("### 🤖 Veredito da Inteligência Artificial (Gemini)")
+                    with st.spinner("Gemini escrevendo análise..."):
+                        analise_texto = gerar_analise_gemini(j_d['Mandante'], j_d['Visitante'], l_m, l_v, prob_tendencia, placar_cravada)
+                        st.info(analise_texto)
 
                     st.markdown("---")
                     col_g, col_t = st.columns([1.2, 1])
@@ -245,21 +238,3 @@ if not df_jogos.empty:
                         df_t = df_res.head(10).copy()
                         df_t['Probabilidade (%)'] = df_t['Prob'].apply(lambda x: f"{x:.2f}%")
                         st.dataframe(df_t[['Placar', 'Probabilidade (%)']], hide_index=True, use_container_width=True)
-
-                    # --- CALCULADORA EV ---
-                    st.markdown("### 💰 Calculadora de Valor (EV)")
-                    od1, odx, odv = st.columns(3)
-                    in_m = od1.number_input(f"Odd {j_d['Mandante']}", 1.0, 20.0, 2.0)
-                    in_x = odx.number_input("Odd Empate", 1.0, 20.0, 3.0)
-                    in_v = odv.number_input(f"Odd {j_d['Visitante']}", 1.0, 20.0, 3.0)
-                    r1, rx, rv = st.columns(3)
-                    for col, p, odd in zip([r1, rx, rv], [p1, px, p2], [in_m, in_x, in_v]):
-                        ev = ((p/100) * odd) - 1
-                        if ev > 0: col.success(f"✅ VALOR: +{ev:.2f}")
-                        else: col.error("❌ SEM VALOR")
-        else:
-            st.warning("Nenhum jogo encontrado para o filtro selecionado.")
-    else:
-        st.warning("Nenhum jogo das Ligas VIP encontrado para hoje.")
-else:
-    st.info("Aguardando seleção de data ou limite de todas as APIs excedido.")

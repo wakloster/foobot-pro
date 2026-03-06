@@ -3,4 +3,4 @@ requests
 pandas
 pytz
 st-gsheets-connection
-google-generativeai
+google-generativeai==0.8.3
