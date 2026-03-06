@@ -9,7 +9,6 @@ import pytz
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="FOOBOT PRO", page_icon="⚽", layout="wide")
 
-# Trava de Segurança: Inicializa o contador de uso
 if 'api_usage' not in st.session_state:
     st.session_state['api_usage'] = 0
 
@@ -32,7 +31,7 @@ def descontar_credito(nome_digitado, saldo_atual):
     conn.update(worksheet="Página1", data=df_atualizado)
     return novo_saldo
 
-# --- INTERFACE DE ACESSO (SIDEBAR) ---
+# --- INTERFACE DE ACESSO ---
 st.sidebar.header("🔑 Acesso do Usuário")
 nome_user = st.sidebar.text_input("Digite seu primeiro nome:")
 
@@ -47,41 +46,31 @@ else:
     st.info("Digite suas informações de login para liberar acesso.")
     st.stop()
 
-# --- CONFIGURAÇÕES DA API (SISTEMA DE FAILOVER EDITADO) ---
-API_KEYS = [
-    "b6fad616c22249eb28bba395de1b20fc"  # CHAVE PRINCIPAL REATIVADA - CONTA NO EMAIL DA JAQUE
-]
+# --- CONFIGURAÇÕES DA API ---
+API_KEYS = ["b6fad616c22249eb28bba395de1b20fc"] # Chave nova no e-mail da Jaque
 
 def fazer_requisicao(url, params=None):
-    # Trava de Segurança: Não deixa passar de 95 para evitar banimento
     if st.session_state['api_usage'] >= 95:
-        st.error("⚠️ Limite de segurança atingido (95/100). Aguardando reset das 21h.")
+        st.error("⚠️ Limite de segurança atingido (95/100).")
         return {}
-
     for key in API_KEYS:
         headers = {"x-apisports-key": key}
         try:
             response = requests.get(url, headers=headers, params=params).json()
-            # Incrementa o uso apenas se a resposta for válida
             st.session_state['api_usage'] += 1
-            
-            erros = response.get('errors', [])
-            if not erros:
+            if not response.get('errors'):
                 return response
         except:
             continue
     return {}
 
-# --- FUNÇÕES DE DADOS COM CACHE ---
 @st.cache_data(ttl=60)
 def buscar_jogos(data_str):
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"date": data_str}
     response = fazer_requisicao(url, params)
-    
     if not response or 'response' not in response or not response['response']:
         return pd.DataFrame()
-
     dados = []
     fuso_br = pytz.timezone('America/Sao_Paulo')
     for jogo in response['response']:
@@ -104,21 +93,24 @@ def buscar_jogos(data_str):
 @st.cache_data(ttl=86400)
 def calcular_medias_ponderadas(id_time, local='home'):
     url = "https://v3.football.api-sports.io/fixtures"
-    params = {"team": id_time, "last": "10", "status": "FT"} 
+    params = {"team": id_time, "last": "10"} 
     response = fazer_requisicao(url, params)
-    
     jogos = response.get('response', [])
-    if not jogos: return 0.5 
+    
+    if not jogos: 
+        return None # Retorna nada para forçar o erro controlado
     
     gols_fator = [] 
-    jogos.reverse() 
-    for i, j in enumerate(jogos):
+    jogos_ordenados = list(reversed(jogos)) 
+    for i, j in enumerate(jogos_ordenados):
         peso = 1 if i < 4 else (2 if i < 8 else 4)
         gols = j['goals']['home'] if j['teams']['home']['id'] == id_time else j['goals']['away']
         if (local == 'home' and j['teams']['home']['id'] == id_time) or (local == 'away' and j['teams']['away']['id'] == id_time):
             peso += 1
-        for _ in range(peso): gols_fator.append(gols)
-    return pd.Series(gols_fator).mean()
+        if gols is not None:
+            for _ in range(peso): gols_fator.append(gols)
+            
+    return pd.Series(gols_fator).mean() if gols_fator else None
 
 @st.cache_data(ttl=60)
 def buscar_escalacoes(id_partida):
@@ -146,7 +138,7 @@ if not df_jogos.empty:
         if row['Pais'] == 'Germany' and row['Liga'] == 'Bundesliga': return True
         if row['Pais'] == 'Italy' and row['Liga'] == 'Serie A': return True
         if row['Pais'] == 'France' and row['Liga'] == 'Ligue 1': return True
-        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana', 'Recopa Sudamericana', 'FIFA Club World Cup']
+        ligas_mundiais = ['UEFA Champions League', 'UEFA Europa League', 'Copa Libertadores', 'Copa Sudamericana']
         return True if row['Pais'] == 'World' and row['Liga'] in ligas_mundiais else False
 
     df_jogos = df_jogos[df_jogos.apply(ligas_permitidas, axis=1)]
@@ -160,9 +152,7 @@ if not df_jogos.empty:
         if not opcoes.empty:
             jogo_sel = st.selectbox("Selecione a partida:", opcoes.tolist())
             if st.button("🔮 Gerar Previsão de Elite"):
-                novo_saldo = descontar_credito(nome_user, saldo)
                 st.session_state['mostrar_resultados'] = True
-                st.sidebar.warning(f"Crédito utilizado! Saldo: {novo_saldo}")
                 st.rerun()
 
             if st.session_state.get('mostrar_resultados', False):
@@ -172,67 +162,37 @@ if not df_jogos.empty:
                     l_m = calcular_medias_ponderadas(j_d['ID_Mandante'], 'home')
                     l_v = calcular_medias_ponderadas(j_d['ID_Visitante'], 'away')
                     
-                    st.markdown("---")
-                    st.markdown("### 📋 Escalações Oficiais")
-                    lineups = buscar_escalacoes(j_d['ID_Partida'])
-                    if lineups:
-                        c_esc1, c_esc2 = st.columns(2)
-                        for i, t in enumerate(lineups):
-                            col = c_esc1 if i == 0 else c_esc2
-                            with col:
-                                st.subheader(f"{t['team']['name']} ({t['formation']})")
-                                st.caption(f"**Titulares:** {', '.join([p['player']['name'] for p in t['startXI']])}")
-                    else: st.info("🕒 Escalações oficiais disponíveis 40 min antes.")
+                    # LOGICA DE RETORNO CASO NÃO SEJA POSSÍVEL CALCULAR
+                    if l_m is None or l_v is None:
+                        st.error("❌ Não foi possível calcular a predição: Histórico de jogos insuficiente na API.")
+                    else:
+                        descontar_credito(nome_user, saldo)
+                        st.markdown("---")
+                        c1, c2 = st.columns(2)
+                        c1.metric(f"Força Atacante ({j_d['Mandante']})", f"{l_m:.2f}")
+                        c2.metric(f"Fragilidade Defensiva ({j_d['Visitante']})", f"{l_v:.2f}")
 
-                    st.markdown("---")
-                    c1, c2 = st.columns(2)
-                    c1.metric(f"Força Atacante ({j_d['Mandante']})", f"{l_m:.2f}")
-                    c2.metric(f"Fragilidade Defensiva ({j_d['Visitante']})", f"{l_v:.2f}")
-
-                    p1 = px = p2 = 0
-                    resultados = []
-                    for i in range(6):
-                        for j in range(6):
-                            prob = (prob_poisson(l_m, i) * prob_poisson(l_v, j)) / 100
-                            resultados.append({'Placar': f"{i} x {j}", 'Prob': prob})
-                            if i > j: p1 += prob
-                            elif i == j: px += prob
-                            else: p2 += prob
-                    
-                    df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
-                    prob_tendencia = max(p1, px, p2)
-                    
-                    st.write("### 🌡️ Nível de Confiança do Modelo")
-                    st.progress(min(prob_tendencia * 2 / 100, 1.0))
-                    st.write(f"Confiança no cenário mais provável: **{prob_tendencia:.1f}%**")
-                    st.success(f"🎯 **CRAVADA RECOMENDADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
-
-                    st.markdown("---")
-                    col_g, col_t = st.columns([1.2, 1])
-                    with col_g:
-                        st.markdown("### 📊 Top 5 Placares")
-                        df_g = df_res.head(5).copy()
-                        df_g['Probabilidade (%)'] = df_g['Prob'].round(2)
-                        st.bar_chart(data=df_g, x='Placar', y='Probabilidade (%)')
-                    with col_t:
-                        st.markdown("### 📋 Top 10 Cenários")
-                        df_t = df_res.head(10).copy()
-                        df_t['Probabilidade (%)'] = df_t['Prob'].apply(lambda x: f"{x:.2f}%")
-                        st.dataframe(df_t[['Placar', 'Probabilidade (%)']], hide_index=True, use_container_width=True)
-
-                    st.markdown("### 💰 Calculadora de Valor (EV)")
-                    od1, odx, odv = st.columns(3)
-                    in_m = od1.number_input(f"Odd {j_d['Mandante']}", 1.0, 20.0, 2.0)
-                    in_x = odx.number_input("Odd Empate", 1.0, 20.0, 3.0)
-                    in_v = odv.number_input(f"Odd {j_d['Visitante']}", 1.0, 20.0, 3.0)
-                    r1, rx, rv = st.columns(3)
-                    for col, p, odd in zip([r1, rx, rv], [p1, px, p2], [in_m, in_x, in_v]):
-                        ev = ((p/100) * odd) - 1
-                        if ev > 0: col.success(f"✅ VALOR: +{ev:.2f}")
-                        else: col.error("❌ SEM VALOR")
-        else:
-            st.warning("Nenhum jogo encontrado para o filtro selecionado.")
+                        p1 = px = p2 = 0
+                        resultados = []
+                        for i in range(6):
+                            for j in range(6):
+                                prob = (prob_poisson(l_m, i) * prob_poisson(l_v, j)) / 100
+                                resultados.append({'Placar': f"{i} x {j}", 'Prob': prob})
+                                if i > j: p1 += prob
+                                elif i == j: px += prob
+                                else: p2 += prob
+                        
+                        df_res = pd.DataFrame(resultados).sort_values(by='Prob', ascending=False)
+                        prob_tendencia = max(p1, px, p2)
+                        
+                        st.success(f"🎯 **CRAVADA:** {df_res.iloc[0]['Placar']} ({df_res.iloc[0]['Prob']:.2f}%)")
+                        
+                        col_g, col_t = st.columns([1.2, 1])
+                        with col_g:
+                            st.bar_chart(data=df_res.head(5), x='Placar', y='Prob')
+                        with col_t:
+                            st.dataframe(df_res.head(10), hide_index=True)
     else:
-        st.warning("Nenhum jogo das Ligas VIP encontrado para hoje.")
+        st.warning("Nenhum jogo das Ligas VIP encontrado.")
 else:
-    st.info("Aguardando seleção de data ou limite de todas as APIs excedido.")
+    st.info("Aguardando seleção de data.")
