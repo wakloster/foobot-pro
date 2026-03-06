@@ -49,7 +49,7 @@ else:
 
 # --- CONFIGURAÇÕES DA API (SISTEMA DE FAILOVER EDITADO) ---
 API_KEYS = [
-    "c529d0695b02fa73ccdcc19cb89026d7"  # CHAVE PRINCIPAL REATIVADA
+    "b6fad616c22249eb28bba395de1b20fc"  # CHAVE PRINCIPAL REATIVADA - CONTA NO EMAIL DA JAQUE
 ]
 
 def fazer_requisicao(url, params=None):
